@@ -1,0 +1,130 @@
+---
+title: "Practical Machine Learning Course Project"
+output: html_document
+---
+
+#Synopsis
+
+The purpose of this document is to identify whether it is possible to predict whether a person can measure his/her physical activity quantitatively, i.e., does he/she perform the exercise correctly or not. We will be using the dataset provided by Quantified Self Movement, which consists of the measurements by accelerometers placed on the belt, forearm, arm and dumbbell of 6 subjects. According to the out-of-sample error of the machine learning algorithm, it is indeed possible to predict whether they performed the exercise correctly or not.  
+  
+More information can be found here: http://groupware.les.inf.puc-rio.br/har
+
+#Preliminary steps
+
+Loading necessary libraries
+```{r}
+suppressWarnings(suppressMessages(library(randomForest)))
+suppressWarnings(suppressMessages(library(caret)))
+suppressWarnings(suppressMessages(library(corrplot)))
+```
+
+##Loading data
+```{r}
+train_data_url <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test_data_url <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+download.file(url = train_data_url, destfile = "pml-training.csv")
+download.file(url = test_data_url, destfile = "pml-testing.csv")
+
+train_csv <- read.table("pml-training.csv", sep = ",", header = TRUE, quote = "\"")
+dim(train_csv)
+test_csv <- read.table("pml-testing.csv", sep = ",", header = TRUE, quote = "\"")
+dim(test_csv)
+```
+
+Let's see what's inside.
+```{r}
+str(train_csv, list.len = 200)
+str(test_csv, list.len = 200)
+```
+
+##Cleaning data
+
+Let's remove features for which some information is missing (NA values). Same columns should remain in both the training and test sets.
+```{r}
+train_full <- colSums(is.na(train_csv)) == 0
+test_full <- colSums(is.na(test_csv)) == 0
+
+train_full <- names(train_full[train_full])
+test_full <- names(test_full[test_full])
+
+train_csv <- train_csv[,names(train_csv) %in% c(intersect(train_full, test_full), "classe")]
+test_csv <- test_csv[,names(test_csv) %in% intersect(train_full, test_full)]
+```
+
+Number of complete cases is equal to the number of rows, which is very good.
+```{r}
+dim(train_csv)
+dim(test_csv)
+
+sum(complete.cases(train_csv))
+sum(complete.cases(test_csv))
+```
+
+Let's view whether there are clear correlations between the outcome and some predictors.
+```{r, fig.width=10, fig.height=10}
+df <- train_csv
+
+for (i in 1:ncol(df)) {
+  col <- df[,i]
+  
+  if (class(col) == "character") {
+    col <- as.numeric(as.factor(col))
+  } else if (class(col) == "factor" | class(col) == "logical" | class(col) == "Date") {
+    col <- as.numeric(col)
+  }
+  
+  df[,i] <- col
+}
+
+dm <- as.matrix(df)
+cr <- cor(dm)
+corrplot(cr, method = "color", addgrid.col = "grey", tl.cex = 0.5)
+```
+
+Variable X has very high correlation with the outcome, so it needs to be removed, or else it will make the model grossly overfit the data.
+```{r}
+train_csv$X <- NULL
+test_csv$X <- NULL
+```
+
+#Modeling
+
+Setting the seed enables us to exactly reproduce the results later.
+```{r}
+set.seed(1)
+```
+
+Let's prepare the training and test sets. Let's remove incomplete cases from the test set.
+```{r}
+train_idx <- createDataPartition(train_csv$classe, p = 0.7, list = FALSE)
+
+train_data <- train_csv[train_idx,]
+test_data <- train_csv[-train_idx,]
+```
+
+Training the model with 5-fold cross-validation.
+```{r}
+control <- trainControl(method = "cv", 5)
+mod <- train(classe ~ ., data = train_data, trControl = control, method = "rf", ntree = 30)
+mod
+```
+Based on cross-validation, we estimate the out-of-sample error to be very small: only **`r round((1 - max(mod$results[,2])) * 100, 2)`%**.  
+  
+Trying out our model on the test data and evaluating the out-of-sample results.
+```{r}
+pred <- predict(mod, test_data)
+confusionMatrix(test_data$classe, pred)
+
+accuracy <- round(as.numeric(postResample(pred, test_data$classe)[1]) * 100, 2)
+out_of_sample_error <- 100 - accuracy
+```
+Accuracy: **`r accuracy`%**  
+Out-of-sample error: **`r out_of_sample_error`%**  
+
+#Final prediction
+
+Let's perform the final prediction on the dataset we kept until the end, to get the results that will be submitted to Coursera for automatic grading.
+```{r}
+predict(mod, test_csv)
+```
